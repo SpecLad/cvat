@@ -34,15 +34,19 @@ jobs:
           ./dev/update_version.py --set="${{ inputs.newVersion }}"
 
       - name: Commit release preparation changes
-        run:
-          git commit -a -m "Prepare release v${{ inputs.newVersion }}"
+        run: |
+          git -c user.name='github-actions[bot]' -c user.email='github-actions[bot]@users.noreply.github.com' \
+            commit -a -m "Prepare release v${{ inputs.newVersion }}"
 
       - name: Push release branch
         run:
-          git push
+          git push -u origin "release-${{ inputs.newVersion }}"
 
       - name: Create release pull request
+        env:
+          GH_TOKEN: "${{ github.token }}"
         run: |
           gh pr create \
-            --base=master
-            --title="Release v2.7.4" # TODO: body?
+            --base=master \
+            --title="Release v2.7.4" \
+            --body="$(awk '/^## / { hn += 1; next } hn == 1 && !/^</' CHANGELOG.md)"
