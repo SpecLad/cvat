@@ -19,6 +19,10 @@ jobs:
             exit 1
           fi
 
+      - name: Install dependencies
+        run:
+          sudo apt-get install -y pandoc
+
       - uses: actions/checkout@v4
 
       - name: Verify that the release is new
@@ -53,7 +57,8 @@ jobs:
         env:
           GH_TOKEN: "${{ github.token }}"
         run: |
-          gh pr create \
-            --base=master \
-            --title="Release v${{ inputs.newVersion }}" \
-            --body="$(awk '/^## / { hn += 1; next } hn == 1 && !/^</' CHANGELOG.md)"
+          ./dev/gh_release_notes.sh \
+            | gh pr create \
+              --base=master \
+              --title="Release v${{ inputs.newVersion }}" \
+              --body-file=-
