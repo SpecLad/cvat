@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- scriv-insert-here -->
 
+<a id='changelog-2.7.99'></a>
+## \[2.7.99\] - 2023-10-11
+
+### Fixed
+
+- Persist image filters across jobs
+  (<https://github.com/opencv/cvat/pull/6953>)
+
+### Security
+
+- Security upgrade opencv-python-headless from 4.5.5.62 to 4.8.1.78
+  (<https://github.com/opencv/cvat/pull/6931>)
+
 <a id='changelog-2.7.5'></a>
 ## \[2.7.5\] - 2023-10-09
 
