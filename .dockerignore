@@ -7,6 +7,7 @@
 /data
 /media
 /keys
+**/__pycache__
 **/node_modules
 /static
 /serverless
@@ -14,5 +15,7 @@
 /helm-chart
 /dev
 /changelog.d
+/cvat/apps/*/tests
+/cvat/apps/*/rules/tests
 /cvat-cli
 /profiles
