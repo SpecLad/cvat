@@ -88,7 +88,10 @@ class TestTaskDataset:
             action=AnnotationUpdateAction.CREATE,
         )
 
-    @pytest.mark.parametrize("media_download_policy", cvatds.MediaDownloadPolicy)
+    @pytest.mark.parametrize(
+        "media_download_policy",
+        [cvatds.MediaDownloadPolicy.PRELOAD_ALL, cvatds.MediaDownloadPolicy.FETCH_FRAMES_ON_DEMAND],
+    )
     def test_basic(self, media_download_policy: cvatds.MediaDownloadPolicy):
         dataset = cvatds.TaskDataset(
             self.client, self.task.id, media_download_policy=media_download_policy
@@ -127,7 +130,10 @@ class TestTaskDataset:
         assert dataset.samples[6].annotations.shapes[0].type.value == "rectangle"
         assert dataset.samples[6].annotations.shapes[0].points == [1.0, 2.0, 3.0, 4.0]
 
-    @pytest.mark.parametrize("media_download_policy", cvatds.MediaDownloadPolicy)
+    @pytest.mark.parametrize(
+        "media_download_policy",
+        [cvatds.MediaDownloadPolicy.PRELOAD_ALL, cvatds.MediaDownloadPolicy.FETCH_FRAMES_ON_DEMAND],
+    )
     def test_deleted_frame(self, media_download_policy: cvatds.MediaDownloadPolicy):
         self.task.remove_frames_by_ids([1])
 

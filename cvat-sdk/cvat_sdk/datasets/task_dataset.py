@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import zipfile
+from abc import ABCMeta, abstractmethod
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 
@@ -13,6 +14,7 @@ import PIL.Image
 import cvat_sdk.core
 import cvat_sdk.core.exceptions
 import cvat_sdk.models as models
+from cvat_sdk.core.proxies.tasks import Task
 from cvat_sdk.datasets.caching import CacheManager, UpdatePolicy, make_cache_manager
 from cvat_sdk.datasets.common import (
     FrameAnnotations,
@@ -23,6 +25,89 @@ from cvat_sdk.datasets.common import (
 )
 
 _NUM_DOWNLOAD_THREADS = 4
+
+
+class _MediaDownloader(metaclass=ABCMeta):
+    def __init__(
+        self,
+        client: cvat_sdk.core.Client,
+        update_policy: UpdatePolicy,
+        task: Task,
+        active_frame_indexes: set[int],
+    ) -> None:
+        self._logger = client.logger
+        self._task = task
+
+    @abstractmethod
+    def load_frame_image(self, frame_index: int) -> PIL.Image.Image: ...
+
+
+class _MediaDownloaderPreloadAll(_MediaDownloader):
+    def __init__(
+        self,
+        client: cvat_sdk.core.Client,
+        update_policy: UpdatePolicy,
+        task: Task,
+        active_frame_indexes: set[int],
+    ) -> None:
+        super().__init__(client, update_policy, task, active_frame_indexes)
+
+        cache_manager = make_cache_manager(client, update_policy)
+
+        needed_chunks = {index // self._task.data_chunk_size for index in active_frame_indexes}
+
+        if self._task.data_original_chunk_type != "imageset":
+            raise UnsupportedDatasetError(
+                f"Preloading media data is only supported for tasks with image chunks;"
+                f" current chunk type is {self._task.data_original_chunk_type!r}"
+            )
+
+        self._logger.info("Downloading chunks...")
+
+        self._chunk_dir = cache_manager.chunk_dir(self._task.id)
+        self._chunk_dir.mkdir(exist_ok=True, parents=True)
+
+        with ThreadPoolExecutor(_NUM_DOWNLOAD_THREADS) as pool:
+
+            def ensure_chunk(chunk_index):
+                cache_manager.ensure_chunk(self._task, chunk_index)
+
+            for _ in pool.map(ensure_chunk, sorted(needed_chunks)):
+                # just need to loop through all results so that any exceptions are propagated
+                pass
+
+        self._logger.info("All chunks downloaded")
+
+    def load_frame_image(self, frame_index: int) -> PIL.Image.Image:
+        chunk_index = frame_index // self._task.data_chunk_size
+        member_index = frame_index % self._task.data_chunk_size
+
+        with zipfile.ZipFile(self._chunk_dir / f"{chunk_index}.zip", "r") as chunk_zip:
+            with chunk_zip.open(chunk_zip.infolist()[member_index]) as chunk_member:
+                image = PIL.Image.open(chunk_member)
+                image.load()
+
+        return image
+
+
+class _MediaDownloaderFetchFramesOnDemand(_MediaDownloader):
+    def __init__(
+        self,
+        client: cvat_sdk.core.Client,
+        update_policy: UpdatePolicy,
+        task: Task,
+        active_frame_indexes: set[int],
+    ) -> None:
+        super().__init__(client, update_policy, task, active_frame_indexes)
+        assert update_policy != UpdatePolicy.NEVER
+
+    def load_frame_image(self, frame_index: int) -> PIL.Image.Image:
+        return PIL.Image.open(self._task.get_frame(frame_index, quality="original"))
+
+_MEDIA_DOWNLOADER_CLASSES_PER_POLICY: dict[MediaDownloadPolicy, type[_MediaDownloader]] = {
+    MediaDownloadPolicy.PRELOAD_ALL: _MediaDownloaderPreloadAll,
+    MediaDownloadPolicy.FETCH_FRAMES_ON_DEMAND: _MediaDownloaderFetchFramesOnDemand,
+}
 
 
 class TaskDataset:
@@ -47,7 +132,8 @@ class TaskDataset:
             self._frame_index = frame_index
 
         def load_image(self) -> PIL.Image.Image:
-            return self._dataset._load_frame_image(self._frame_index)
+            assert self._frame_index in self._dataset._frame_annotations
+            return self._dataset._media_downloader.load_frame_image(self._frame_index)
 
     def __init__(
         self,
@@ -95,15 +181,9 @@ class TaskDataset:
 
         active_frame_indexes = set(range(self._task.size)) - set(data_meta.deleted_frames)
 
-        if media_download_policy == MediaDownloadPolicy.PRELOAD_ALL:
-            needed_chunks = {index // self._task.data_chunk_size for index in active_frame_indexes}
-            self._ensure_chunks(task_id, cache_manager, needed_chunks)
-            self._load_frame_image = self._load_frame_image_from_cache
-        elif media_download_policy == MediaDownloadPolicy.FETCH_FRAMES_ON_DEMAND:
-            assert update_policy != UpdatePolicy.NEVER
-            self._load_frame_image = self._load_frame_image_from_server
-        else:
-            assert False, "Unknown media download policy"
+        self._media_downloader = _MEDIA_DOWNLOADER_CLASSES_PER_POLICY[media_download_policy](
+            client, update_policy, self._task, active_frame_indexes
+        )
 
         if load_annotations:
             self._load_annotations(cache_manager, sorted(active_frame_indexes))
@@ -125,29 +205,6 @@ class TaskDataset:
             )
             for k, v in self._frame_annotations.items()
         ]
-
-    def _ensure_chunks(self, task_id, cache_manager, chunk_indexes):
-        if self._task.data_original_chunk_type != "imageset":
-            raise UnsupportedDatasetError(
-                f"Preloading media data is only supported for tasks with image chunks;"
-                f" current chunk type is {self._task.data_original_chunk_type!r}"
-            )
-
-        self._logger.info("Downloading chunks...")
-
-        self._chunk_dir = cache_manager.chunk_dir(task_id)
-        self._chunk_dir.mkdir(exist_ok=True, parents=True)
-
-        with ThreadPoolExecutor(_NUM_DOWNLOAD_THREADS) as pool:
-
-            def ensure_chunk(chunk_index):
-                cache_manager.ensure_chunk(self._task, chunk_index)
-
-            for _ in pool.map(ensure_chunk, sorted(chunk_indexes)):
-                # just need to loop through all results so that any exceptions are propagated
-                pass
-
-        self._logger.info("All chunks downloaded")
 
     def _load_annotations(self, cache_manager: CacheManager, frame_indexes: Iterable[int]) -> None:
         annotations = cache_manager.ensure_task_model(
@@ -188,21 +245,3 @@ class TaskDataset:
         Clients must not modify the object returned by this property or its components.
         """
         return self._samples
-
-    def _load_frame_image_from_cache(self, frame_index: int) -> PIL.Image:
-        assert frame_index in self._frame_annotations
-
-        chunk_index = frame_index // self._task.data_chunk_size
-        member_index = frame_index % self._task.data_chunk_size
-
-        with zipfile.ZipFile(self._chunk_dir / f"{chunk_index}.zip", "r") as chunk_zip:
-            with chunk_zip.open(chunk_zip.infolist()[member_index]) as chunk_member:
-                image = PIL.Image.open(chunk_member)
-                image.load()
-
-        return image
-
-    def _load_frame_image_from_server(self, frame_index: int) -> PIL.Image:
-        assert frame_index in self._frame_annotations
-
-        return PIL.Image.open(self._task.get_frame(frame_index, quality="original"))
