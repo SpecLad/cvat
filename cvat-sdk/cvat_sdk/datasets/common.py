@@ -73,3 +73,6 @@ class MediaDownloadPolicy(Enum):
 
     FETCH_FRAMES_ON_DEMAND = auto()
     """Download the media element for each frame whenever MediaElement.load_* is invoked."""
+
+    KEEP_SINGLE_CHUNK = auto()
+    """TODO"""

@@ -4,15 +4,18 @@
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 import zipfile
 from abc import ABCMeta, abstractmethod
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Optional
 
 import PIL.Image
 
 import cvat_sdk.core
-import cvat_sdk.core.exceptions
 import cvat_sdk.models as models
 from cvat_sdk.core.proxies.tasks import Task
 from cvat_sdk.datasets.caching import CacheManager, UpdatePolicy, make_cache_manager
@@ -37,9 +40,26 @@ class _MediaDownloader(metaclass=ABCMeta):
     ) -> None:
         self._logger = client.logger
         self._task = task
+        self._entered = False
 
     @abstractmethod
     def load_frame_image(self, frame_index: int) -> PIL.Image.Image: ...
+
+    def __enter__(self) -> None:
+        assert not self._entered
+        self._entered = True
+        self._doenter()
+
+    def _doenter(self) -> None:
+        pass
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        assert self._entered
+        self._doexit()
+        self._entered = False
+
+    def _doexit(self) -> None:
+        pass
 
 
 class _MediaDownloaderPreloadAll(_MediaDownloader):
@@ -104,9 +124,64 @@ class _MediaDownloaderFetchFramesOnDemand(_MediaDownloader):
     def load_frame_image(self, frame_index: int) -> PIL.Image.Image:
         return PIL.Image.open(self._task.get_frame(frame_index, quality="original"))
 
+
+class _MediaDownloaderKeepSingleChunk(_MediaDownloader):
+    def __init__(
+        self,
+        client: cvat_sdk.core.Client,
+        update_policy: UpdatePolicy,
+        task: Task,
+        active_frame_indexes: set[int],
+    ):
+        super().__init__(client, update_policy, task, active_frame_indexes)
+
+        self._temp_dir: Optional[Path] = None
+        self._stored_chunk_zip: Optional[zipfile.ZipFile] = None
+        self._stored_chunk_index: Optional[int] = None
+
+    def load_frame_image(self, frame_index: int) -> PIL.Image.Image:
+        assert self._entered, "TODO"
+
+        chunk_index = frame_index // self._task.data_chunk_size
+        member_index = frame_index % self._task.data_chunk_size
+
+        if self._stored_chunk_index != chunk_index:
+            self._delete_stored_chunk()
+
+            chunk_path = self._temp_dir / "chunk.zip"
+            with open(chunk_path, "wb") as chunk_file:
+                self._logger.info(f"Downloading chunk #{chunk_index}...")
+                self._task.download_chunk(chunk_index, chunk_file, quality="original")
+
+            self._stored_chunk_zip = zipfile.ZipFile(chunk_path, "r")
+            self._zip_infos = self._stored_chunk_zip.infolist()
+            self._stored_chunk_index = chunk_index
+
+        with self._stored_chunk_zip.open(self._zip_infos[member_index]) as chunk_member:
+            image = PIL.Image.open(chunk_member)
+            image.load()
+
+        return image
+
+    def _doenter(self):
+        self._temp_dir = Path(tempfile.mkdtemp())
+
+    def _doexit(self):
+        self._delete_stored_chunk()
+
+        shutil.rmtree(self._temp_dir)
+        self._temp_dir = None
+
+    def _delete_stored_chunk(self):
+        if self._stored_chunk_zip:
+            self._stored_chunk_zip.close()
+            self._stored_chunk_zip = self._stored_chunk_index = None
+
+
 _MEDIA_DOWNLOADER_CLASSES_PER_POLICY: dict[MediaDownloadPolicy, type[_MediaDownloader]] = {
     MediaDownloadPolicy.PRELOAD_ALL: _MediaDownloaderPreloadAll,
     MediaDownloadPolicy.FETCH_FRAMES_ON_DEMAND: _MediaDownloaderFetchFramesOnDemand,
+    MediaDownloadPolicy.KEEP_SINGLE_CHUNK: _MediaDownloaderKeepSingleChunk,
 }
 
 
@@ -245,3 +320,11 @@ class TaskDataset:
         Clients must not modify the object returned by this property or its components.
         """
         return self._samples
+
+    def __enter__(self) -> TaskDataset:
+        self._media_downloader.__enter__()
+
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self._media_downloader.__exit__(exc_type, exc_value, traceback)

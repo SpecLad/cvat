@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
+import contextlib
 import io
 from logging import Logger
 from pathlib import Path
@@ -89,10 +90,16 @@ class TestTaskDataset:
         )
 
     @pytest.mark.parametrize(
-        "media_download_policy",
-        [cvatds.MediaDownloadPolicy.PRELOAD_ALL, cvatds.MediaDownloadPolicy.FETCH_FRAMES_ON_DEMAND],
+        "media_download_policy,use_as_cm",
+        [
+            (cvatds.MediaDownloadPolicy.PRELOAD_ALL, False),
+            (cvatds.MediaDownloadPolicy.PRELOAD_ALL, True),
+            (cvatds.MediaDownloadPolicy.FETCH_FRAMES_ON_DEMAND, False),
+            (cvatds.MediaDownloadPolicy.FETCH_FRAMES_ON_DEMAND, True),
+            (cvatds.MediaDownloadPolicy.KEEP_SINGLE_CHUNK, True),
+        ],
     )
-    def test_basic(self, media_download_policy: cvatds.MediaDownloadPolicy):
+    def test_basic(self, media_download_policy: cvatds.MediaDownloadPolicy, use_as_cm: bool):
         dataset = cvatds.TaskDataset(
             self.client, self.task.id, media_download_policy=media_download_policy
         )
@@ -108,14 +115,19 @@ class TestTaskDataset:
 
         assert len(dataset.samples) == self.task.size
 
-        for index, sample in enumerate(dataset.samples):
-            assert sample.frame_index == index
-            assert sample.frame_name == self.images[index].name
+        if use_as_cm:
+            cm = dataset
+        else:
+            cm = contextlib.nullcontext()
+        with cm:
+            for index, sample in enumerate(dataset.samples):
+                assert sample.frame_index == index
+                assert sample.frame_name == self.images[index].name
 
-            actual_image = sample.media.load_image()
-            expected_image = PIL.Image.open(self.images[index])
+                actual_image = sample.media.load_image()
+                expected_image = PIL.Image.open(self.images[index])
 
-            assert actual_image == expected_image
+                assert actual_image == expected_image
 
         assert not dataset.samples[0].annotations.tags
         assert not dataset.samples[1].annotations.shapes
@@ -131,30 +143,40 @@ class TestTaskDataset:
         assert dataset.samples[6].annotations.shapes[0].points == [1.0, 2.0, 3.0, 4.0]
 
     @pytest.mark.parametrize(
-        "media_download_policy",
-        [cvatds.MediaDownloadPolicy.PRELOAD_ALL, cvatds.MediaDownloadPolicy.FETCH_FRAMES_ON_DEMAND],
+        "media_download_policy,use_as_cm",
+        [
+            (cvatds.MediaDownloadPolicy.PRELOAD_ALL, False),
+            (cvatds.MediaDownloadPolicy.FETCH_FRAMES_ON_DEMAND, False),
+            (cvatds.MediaDownloadPolicy.KEEP_SINGLE_CHUNK, True),
+        ],
     )
-    def test_deleted_frame(self, media_download_policy: cvatds.MediaDownloadPolicy):
+    def test_deleted_frame(self, media_download_policy: cvatds.MediaDownloadPolicy, use_as_cm: bool):
         self.task.remove_frames_by_ids([1])
 
         dataset = cvatds.TaskDataset(
             self.client, self.task.id, media_download_policy=media_download_policy
         )
 
+        if use_as_cm:
+            cm = dataset
+        else:
+            cm = contextlib.nullcontext()
+
         assert len(dataset.samples) == self.task.size - 1
 
-        # sample #0 is still frame #0
-        assert dataset.samples[0].frame_index == 0
-        assert dataset.samples[0].media.load_image() == PIL.Image.open(self.images[0])
+        with cm:
+            # sample #0 is still frame #0
+            assert dataset.samples[0].frame_index == 0
+            assert dataset.samples[0].media.load_image() == PIL.Image.open(self.images[0])
 
-        # sample #1 is now frame #2
-        assert dataset.samples[1].frame_index == 2
-        assert dataset.samples[1].media.load_image() == PIL.Image.open(self.images[2])
+            # sample #1 is now frame #2
+            assert dataset.samples[1].frame_index == 2
+            assert dataset.samples[1].media.load_image() == PIL.Image.open(self.images[2])
 
-        # sample #5 is now frame #6
-        assert dataset.samples[5].frame_index == 6
-        assert dataset.samples[5].media.load_image() == PIL.Image.open(self.images[6])
-        assert len(dataset.samples[5].annotations.shapes) == 1
+            # sample #5 is now frame #6
+            assert dataset.samples[5].frame_index == 6
+            assert dataset.samples[5].media.load_image() == PIL.Image.open(self.images[6])
+            assert len(dataset.samples[5].annotations.shapes) == 1
 
     def test_offline(self, monkeypatch: pytest.MonkeyPatch):
         dataset = cvatds.TaskDataset(
