@@ -150,7 +150,9 @@ class TestTaskDataset:
             (cvatds.MediaDownloadPolicy.KEEP_SINGLE_CHUNK, True),
         ],
     )
-    def test_deleted_frame(self, media_download_policy: cvatds.MediaDownloadPolicy, use_as_cm: bool):
+    def test_deleted_frame(
+        self, media_download_policy: cvatds.MediaDownloadPolicy, use_as_cm: bool
+    ):
         self.task.remove_frames_by_ids([1])
 
         dataset = cvatds.TaskDataset(
