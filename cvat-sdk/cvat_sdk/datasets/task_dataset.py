@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import io
 import shutil
 import tempfile
 import zipfile
@@ -48,10 +49,6 @@ class _MediaDownloader(metaclass=ABCMeta):
     def __enter__(self) -> None:
         assert not self._entered
         self._entered = True
-        self._doenter()
-
-    def _doenter(self) -> None:
-        pass
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         assert self._entered
@@ -135,9 +132,9 @@ class _MediaDownloaderKeepSingleChunk(_MediaDownloader):
     ):
         super().__init__(client, update_policy, task, active_frame_indexes)
 
-        self._temp_dir: Optional[Path] = None
-        self._stored_chunk_zip: Optional[zipfile.ZipFile] = None
         self._stored_chunk_index: Optional[int] = None
+        self._stored_chunk_file: Optional[io.IOBase] = None
+        self._stored_chunk_zip: Optional[zipfile.ZipFile] = None
 
     def load_frame_image(self, frame_index: int) -> PIL.Image.Image:
         assert self._entered, "TODO"
@@ -146,14 +143,15 @@ class _MediaDownloaderKeepSingleChunk(_MediaDownloader):
         member_index = frame_index % self._task.data_chunk_size
 
         if self._stored_chunk_index != chunk_index:
-            self._delete_stored_chunk()
+            self._doexit()
 
-            chunk_path = self._temp_dir / "chunk.zip"
-            with open(chunk_path, "wb") as chunk_file:
-                self._logger.info(f"Downloading chunk #{chunk_index}...")
-                self._task.download_chunk(chunk_index, chunk_file, quality="original")
+            self._stored_chunk_file = tempfile.TemporaryFile()
 
-            self._stored_chunk_zip = zipfile.ZipFile(chunk_path, "r")
+            self._logger.info(f"Downloading chunk #{chunk_index}...")
+            self._task.download_chunk(chunk_index, self._stored_chunk_file, quality="original")
+            self._stored_chunk_file.seek(0)
+
+            self._stored_chunk_zip = zipfile.ZipFile(self._stored_chunk_file, "r")
             self._zip_infos = self._stored_chunk_zip.infolist()
             self._stored_chunk_index = chunk_index
 
@@ -163,20 +161,16 @@ class _MediaDownloaderKeepSingleChunk(_MediaDownloader):
 
         return image
 
-    def _doenter(self):
-        self._temp_dir = Path(tempfile.mkdtemp())
-
     def _doexit(self):
-        self._delete_stored_chunk()
-
-        shutil.rmtree(self._temp_dir)
-        self._temp_dir = None
-
-    def _delete_stored_chunk(self):
         if self._stored_chunk_zip:
             self._stored_chunk_zip.close()
-            self._stored_chunk_zip = self._stored_chunk_index = None
+            self._stored_chunk_zip = None
 
+        if self._stored_chunk_file:
+            self._stored_chunk_file.close()
+            self._stored_chunk_file = None
+
+        self._stored_chunk_index = None
 
 _MEDIA_DOWNLOADER_CLASSES_PER_POLICY: dict[MediaDownloadPolicy, type[_MediaDownloader]] = {
     MediaDownloadPolicy.PRELOAD_ALL: _MediaDownloaderPreloadAll,
