@@ -807,7 +807,12 @@ class _Agent:
         )
 
     def _calculate_result_for_annotate_task_ar(self, ar_id: str, ar_params) -> dict[str, Any]:
-        ds = cvatds.TaskDataset(self._client, ar_params["task"], load_annotations=False)
+        ds = cvatds.TaskDataset(
+            self._client,
+            ar_params["task"],
+            load_annotations=False,
+            media_download_policy=cvatds.MediaDownloadPolicy.KEEP_SINGLE_CHUNK,
+        )
 
         # Fetching the dataset might take a while, so do a progress update to let the server
         # know we're still alive.
