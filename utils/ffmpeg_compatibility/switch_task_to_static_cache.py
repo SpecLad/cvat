@@ -44,7 +44,7 @@ def _build_extractor(data: models.Data):
         "start": data.start_frame,
         "stop": data.stop_frame,
     }
-    return MEDIA_TYPES["video"]["extractor"](**details)
+    return MEDIA_TYPES["video"].extractor_class(**details)
 
 
 def _cleanup_static_cache(data: models.Data):

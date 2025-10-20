@@ -277,7 +277,7 @@ def _validate_data(counter, manifest_files=None):
     multiple_entries = 0
     for media_type, media_config in MEDIA_TYPES.items():
         if counter[media_type]:
-            if media_config['unique']:
+            if media_config.unique:
                 unique_entries += len(counter[media_type])
             else:
                 multiple_entries += len(counter[media_type])
@@ -288,8 +288,8 @@ def _validate_data(counter, manifest_files=None):
                 )
 
     if unique_entries == 1 and multiple_entries > 0 or unique_entries > 1:
-        unique_types = ', '.join([k for k, v in MEDIA_TYPES.items() if v['unique']])
-        multiply_types = ', '.join([k for k, v in MEDIA_TYPES.items() if not v['unique']])
+        unique_types = ', '.join([k for k, v in MEDIA_TYPES.items() if v.unique])
+        multiply_types = ', '.join([k for k, v in MEDIA_TYPES.items() if not v.unique])
         count = ', '.join(['{} {}(s)'.format(len(v), k) for k, v in counter.items()])
         raise ValueError('Only one {} or many {} can be used simultaneously, \
             but {} found.'.format(unique_types, multiply_types, count))
@@ -297,7 +297,7 @@ def _validate_data(counter, manifest_files=None):
     if unique_entries == 0 and multiple_entries == 0:
         raise ValueError('No media data found')
 
-    task_modes = [MEDIA_TYPES[media_type]['mode'] for media_type, media_files in counter.items() if media_files]
+    task_modes = [MEDIA_TYPES[media_type].mode for media_type, media_files in counter.items() if media_files]
 
     if not all(mode == task_modes[0] for mode in task_modes):
         raise Exception('Could not combine different task modes for data')
@@ -856,7 +856,7 @@ def create_thread(
     if (data['server_files']) and len(media['directory']) and len(media['image']):
         media['image'].extend(
             [os.path.relpath(image, upload_dir) for image in
-                MEDIA_TYPES['directory']['extractor'](
+                MEDIA_TYPES['directory'].extractor_class(
                     source_path=[os.path.join(upload_dir, f) for f in media['directory']],
                 ).absolute_source_paths
             ]
@@ -907,7 +907,7 @@ def create_thread(
         if media_type != 'video':
             details['sorting_method'] = data['sorting_method'] if not is_media_sorted else models.SortingMethod.PREDEFINED
 
-        extractor = MEDIA_TYPES[media_type]['extractor'](**details)
+        extractor = MEDIA_TYPES[media_type].extractor_class(**details)
 
     if extractor is None:
         raise ValidationError("Can't create a task without data")
@@ -919,25 +919,25 @@ def create_thread(
         data['server_files'] and
         not is_data_in_cloud and
         not data['copy_data'] and
-        isinstance(extractor, MEDIA_TYPES['image']['extractor'])
+        isinstance(extractor, MEDIA_TYPES['image'].extractor_class)
     ):
         extractor.filter(
             lambda x: os.path.relpath(x, upload_dir) not in server_files_exclude and \
                 all([f'{i}/' not in server_files_exclude for i in Path(x).relative_to(upload_dir).parents])
         )
 
-    if isinstance(extractor, MEDIA_TYPES['zip']['extractor']):
+    if isinstance(extractor, MEDIA_TYPES['zip'].extractor_class):
         extractor.extract()
 
     validate_dimension = ValidateDimension()
     if db_data.storage == models.StorageChoice.LOCAL or (
         db_data.storage == models.StorageChoice.SHARE and
         isinstance(extractor, (
-            MEDIA_TYPES['archive']['extractor'], MEDIA_TYPES['zip']['extractor']
+            MEDIA_TYPES['archive'].extractor_class, MEDIA_TYPES['zip'].extractor_class
         ))
     ):
         validate_dimension.validate(upload_dir)
-    elif not isinstance(extractor, MEDIA_TYPES['video']['extractor']):
+    elif not isinstance(extractor, MEDIA_TYPES['video'].extractor_class):
         validate_dimension.detect_dimension_for_paths(extractor.absolute_source_paths)
 
     if (db_task.project is not None and
@@ -965,12 +965,12 @@ def create_thread(
         )
 
     related_images = {}
-    if isinstance(extractor, MEDIA_TYPES['image']['extractor']):
+    if isinstance(extractor, MEDIA_TYPES['image'].extractor_class):
         related_images = _find_and_filter_related_images(extractor, upload_dir=upload_dir)
 
     if job_file_mapping or (
         (
-            not isinstance(extractor, MEDIA_TYPES['video']['extractor']) and
+            not isinstance(extractor, MEDIA_TYPES['video'].extractor_class) and
             is_backup_restore and
             db_data.storage_method == models.StorageMethodChoice.CACHE and
             db_data.sorting_method in {models.SortingMethod.RANDOM, models.SortingMethod.PREDEFINED}
@@ -979,11 +979,11 @@ def create_thread(
             not is_backup_restore and
             data['sorting_method'] == models.SortingMethod.PREDEFINED and (
                 # Sorting with manifest is required for zip
-                isinstance(extractor, MEDIA_TYPES['zip']['extractor']) or
+                isinstance(extractor, MEDIA_TYPES['zip'].extractor_class) or
 
                 # Sorting with manifest is optional for non-video
                 (manifest_file or manifest) and
-                not isinstance(extractor, MEDIA_TYPES['video']['extractor'])
+                not isinstance(extractor, MEDIA_TYPES['video'].extractor_class)
             )
         )
     ):
@@ -1067,7 +1067,7 @@ def create_thread(
         if not media_files:
             continue
 
-        if task_mode == MEDIA_TYPES['video']['mode']:
+        if task_mode == MEDIA_TYPES['video'].mode:
             if manifest_file:
                 try:
                     update_status('Validating the input manifest file')
@@ -1607,10 +1607,10 @@ def _create_static_chunks(db_task: models.Task, *, media_extractor: IMediaReader
         if (
             db_task.dimension == models.DimensionType.DIM_2D and
             isinstance(media_extractor, (
-                MEDIA_TYPES['image']['extractor'],
-                MEDIA_TYPES['zip']['extractor'],
-                MEDIA_TYPES['pdf']['extractor'],
-                MEDIA_TYPES['archive']['extractor'],
+                MEDIA_TYPES['image'].extractor_class,
+                MEDIA_TYPES['zip'].extractor_class,
+                MEDIA_TYPES['pdf'].extractor_class,
+                MEDIA_TYPES['archive'].extractor_class,
             ))
         ):
             chunk_data = list(map(load_image, chunk_data))
@@ -1663,7 +1663,7 @@ def _create_static_chunks(db_task: models.Task, *, media_extractor: IMediaReader
 
     frame_map = {} # frame number -> extractor frame number
 
-    if isinstance(media_extractor, MEDIA_TYPES['video']['extractor']):
+    if isinstance(media_extractor, MEDIA_TYPES['video'].extractor_class):
         def _get_frame_size(frame_tuple: tuple[av.VideoFrame, Any, Any]) -> int:
             # There is no need to be absolutely precise here,
             # just need to provide the reasonable upper boundary.
@@ -1699,7 +1699,7 @@ def _create_static_chunks(db_task: models.Task, *, media_extractor: IMediaReader
         # TODO: maybe make real multithreading support, currently the code is limited by 1
         # video segment chunk, even if more threads are available
         max_concurrency = 2 * settings.CVAT_CONCURRENT_CHUNK_PROCESSING if not isinstance(
-            media_extractor, MEDIA_TYPES['video']['extractor']
+            media_extractor, MEDIA_TYPES['video'].extractor_class
         ) else 2
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrency) as executor:
             for segment_idx, db_segment in enumerate(db_segments):

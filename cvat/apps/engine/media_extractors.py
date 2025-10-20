@@ -20,7 +20,10 @@ from dataclasses import dataclass
 from enum import IntEnum
 from fractions import Fraction
 from random import shuffle
-from typing import Any, Callable, Optional, Protocol, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, TypeVar, Union
+
+if TYPE_CHECKING:
+    from _typeshed import StrPath
 
 import av
 import av.codec
@@ -66,7 +69,7 @@ class FrameQuality(IntEnum):
 
 def get_mime(name):
     for type_name, type_def in MEDIA_TYPES.items():
-        if type_def["has_mime_type"](name):
+        if type_def.has_type(name):
             return type_name
 
     return "unknown"
@@ -1210,43 +1213,6 @@ class Mpeg4CompressedChunkWriter(Mpeg4ChunkWriter):
         return [(input_w, input_h)]
 
 
-def _is_archive(path):
-    mime = mimetypes.guess_type(path)
-    mime_type = mime[0]
-    encoding = mime[1]
-    supportedArchives = [
-        "application/x-rar-compressed",
-        "application/x-tar",
-        "application/x-7z-compressed",
-        "application/x-cpio",
-        "application/gzip",
-        "application/x-bzip",
-    ]
-    return mime_type in supportedArchives or encoding in supportedArchives
-
-
-def _is_video(path):
-    mime = mimetypes.guess_type(path)
-    return mime[0] is not None and mime[0].startswith("video")
-
-
-def _is_image(path):
-    mime = mimetypes.guess_type(path)
-    # Exclude vector graphic images because Pillow cannot work with them
-    return (
-        mime[0] is not None and mime[0].startswith("image") and not mime[0].startswith("image/svg")
-    )
-
-
-def _is_dir(path):
-    return os.path.isdir(path)
-
-
-def _is_pdf(path):
-    mime = mimetypes.guess_type(path)
-    return mime[0] == "application/pdf"
-
-
 def _is_zip(path):
     mime = mimetypes.guess_type(path)
     mime_type = mime[0]
@@ -1255,51 +1221,94 @@ def _is_zip(path):
     return mime_type in supportedArchives or encoding in supportedArchives
 
 
-# 'has_mime_type': function receives 1 argument - path to file.
-#                  Should return True if file has specified media type.
-# 'extractor': class that extracts images from specified media.
-# 'mode': 'annotation' or 'interpolation' - mode of task that should be created.
-# 'unique': True or False - describes how the type can be combined with other.
-#           True - only one item of this type and no other is allowed
-#           False - this media types can be combined with other which have unique is False
+class MediaType:
+    extractor_class: type[IMediaReader]
+    """Class that extracts images from media of this type."""
 
-MEDIA_TYPES = {
-    "image": {
-        "has_mime_type": _is_image,
-        "extractor": ImageListReader,
-        "mode": "annotation",
-        "unique": False,
-    },
-    "video": {
-        "has_mime_type": _is_video,
-        "extractor": VideoReader,
-        "mode": "interpolation",
-        "unique": True,
-    },
-    "archive": {
-        "has_mime_type": _is_archive,
-        "extractor": ArchiveReader,
-        "mode": "annotation",
-        "unique": True,
-    },
-    "directory": {
-        "has_mime_type": _is_dir,
-        "extractor": DirectoryReader,
-        "mode": "annotation",
-        "unique": False,
-    },
-    "pdf": {
-        "has_mime_type": _is_pdf,
-        "extractor": PdfReader,
-        "mode": "annotation",
-        "unique": True,
-    },
-    "zip": {
-        "has_mime_type": _is_zip,
-        "extractor": ZipReader,
-        "mode": "annotation",
-        "unique": True,
-    },
+    mode: str = "annotation"
+    """Mode of task that should be created."""
+
+    unique: bool = True
+    """Whether a media file of this type can be combined with other media files."""
+
+    @classmethod
+    def has_type(cls, path: StrPath) -> bool:
+        """Returns whether the file at 'path' matches this media type."""
+        return False
+
+
+class MediaTypeImage(MediaType):
+    extractor_class = ImageListReader
+    unique = False
+
+    @classmethod
+    def has_type(cls, path: StrPath) -> bool:
+        t, _ = mimetypes.guess_type(path)
+        # Exclude vector graphic images because Pillow cannot work with them
+        return t is not None and t.startswith("image") and not t.startswith("image/svg")
+
+
+class MediaTypeVideo(MediaType):
+    extractor_class = VideoReader
+    mode = "interpolation"
+
+    @classmethod
+    def has_type(cls, path: StrPath) -> bool:
+        t, _ = mimetypes.guess_type(path)
+        return t is not None and t.startswith("video")
+
+
+class MediaTypeArchive(MediaType):
+    extractor_class = ArchiveReader
+
+    supported_archives = (
+        "application/x-rar-compressed",
+        "application/x-tar",
+        "application/x-7z-compressed",
+        "application/x-cpio",
+        "application/gzip",
+        "application/x-bzip",
+    )
+
+    @classmethod
+    def has_type(cls, path: StrPath) -> bool:
+        t, enc = mimetypes.guess_type(path)
+        return t in cls.supported_archives or enc in cls.supported_archives
+
+
+class MediaTypeDirectory(MediaType):
+    extractor_class = DirectoryReader
+    unique = False
+
+    @classmethod
+    def has_type(cls, path: StrPath) -> bool:
+        return os.path.isdir(path)
+
+
+class MediaTypePdf(MediaType):
+    extractor_class = PdfReader
+
+    @classmethod
+    def has_type(cls, path: StrPath) -> bool:
+        t, _ = mimetypes.guess_type(path)
+        return t == "application/pdf"
+
+
+class MediaTypeZip(MediaType):
+    extractor_class = ZipReader
+
+    @classmethod
+    def has_type(cls, path: StrPath) -> bool:
+        return _is_zip(path)
+
+
+MEDIA_TYPES: dict[str, type[MediaType]] = {
+    "image": MediaTypeImage,
+    "video": MediaTypeVideo,
+    "archive": MediaTypeArchive,
+    "directory": MediaTypeDirectory,
+    "pdf": MediaTypePdf,
+    "zip": MediaTypeZip,
 }
 
 
