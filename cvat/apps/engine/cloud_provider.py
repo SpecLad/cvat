@@ -181,13 +181,13 @@ class AbstractCloudStorage(ABC):
 
     @validate_file_status
     @validate_bucket_status
-    def download_file(self, key: str, path: str, /) -> None:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+    def download_file(self, key: str, path: Path, /) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
         try:
             with open(path, "wb") as f:
                 self._download_fileobj_to_stream(key, f)
         except Exception:
-            Path(path).unlink()
+            path.unlink()
             raise
 
     @validate_file_status
@@ -243,8 +243,8 @@ class AbstractCloudStorage(ABC):
 
     def bulk_download_to_dir(
         self,
-        files: list[str | tuple[str, str]],
-        upload_dir: str,
+        files: Sequence[str | tuple[str, Path]],
+        upload_dir: Path,
     ) -> None:
         """
         :param files: a list of filenames or (storage filename, output filename) pairs
@@ -262,7 +262,7 @@ class AbstractCloudStorage(ABC):
                     key = f
                     output_path = f
 
-                output_path = os.path.join(upload_dir, output_path)
+                output_path = upload_dir / output_path
                 futures.append(executor.submit(self.download_file, key, output_path))
 
             done, _ = wait(futures, return_when=FIRST_EXCEPTION)

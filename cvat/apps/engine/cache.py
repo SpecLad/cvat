@@ -17,6 +17,7 @@ from collections.abc import Callable, Collection, Generator, Iterator, Sequence
 from contextlib import ExitStack, closing
 from datetime import datetime, timezone
 from itertools import groupby, pairwise
+from pathlib import Path
 from typing import Any, TypeAlias, overload
 
 import attrs
@@ -592,7 +593,7 @@ class MediaCache:
         db_data = db_task.require_data()
         manifest_path = db_data.get_manifest_path()
 
-        if os.path.isfile(manifest_path) and db_data.storage == models.StorageChoice.CLOUD_STORAGE:
+        if manifest_path.is_file() and db_data.storage == models.StorageChoice.CLOUD_STORAGE:
             reader = ImageReaderWithManifest(manifest_path)
             with ExitStack() as es:
                 db_cloud_storage = db_data.cloud_storage
@@ -600,14 +601,14 @@ class MediaCache:
                     raise CloudStorageMissingError("Task is no longer connected to cloud storage")
                 storage_client = db_storage_to_storage_instance(db_cloud_storage)
 
-                tmp_dir = es.enter_context(tempfile.TemporaryDirectory(prefix="cvat"))
-                files_to_download: list[tuple[str, str]] = []  # (storage filename, output filename)
+                tmp_dir = Path(es.enter_context(tempfile.TemporaryDirectory(prefix="cvat")))
+                files_to_download: list[tuple[str, Path]] = []  # (storage filename, output filename)
                 checksums = []
                 media = []
                 for item in reader.iterate_frames(frame_ids):
                     task_filename = f"{item['name']}{item['extension']}"
                     storage_filename = item.get("meta", {}).get("original_name", task_filename)
-                    fs_filename = os.path.join(tmp_dir, task_filename)
+                    fs_filename = tmp_dir / task_filename
                     files_to_download.append((storage_filename, fs_filename))
 
                     checksums.append(item.get("checksum", None))
@@ -660,7 +661,7 @@ class MediaCache:
             media = []
             for frame_id, frame_path in db_images:
                 if frame_id == next_requested_frame_id:
-                    source_path = os.path.join(raw_data_dir, frame_path)
+                    source_path = raw_data_dir / frame_path
                     media.append((source_path, source_path))
 
                     next_requested_frame_id = next(requested_frame_iter, None)
@@ -700,7 +701,7 @@ class MediaCache:
             media = []
 
             if (
-                os.path.isfile(manifest_path)
+                manifest_path.is_file()
                 and db_data.storage == models.StorageChoice.CLOUD_STORAGE
             ):
                 reader = ImageReaderWithManifest(manifest_path)
@@ -710,8 +711,8 @@ class MediaCache:
                     raise CloudStorageMissingError("Task is no longer connected to cloud storage")
                 storage_client = db_storage_to_storage_instance(db_cloud_storage)
 
-                tmp_dir = es.enter_context(tempfile.TemporaryDirectory(prefix="cvat"))
-                files_to_download = []
+                tmp_dir = Path(es.enter_context(tempfile.TemporaryDirectory(prefix="cvat")))
+                files_to_download: list[str] = []
                 for frame_id, frame in zip(
                     frame_ids, reader.iterate_frames(frame_ids), strict=True
                 ):
@@ -719,7 +720,7 @@ class MediaCache:
 
                     for ri_filename in frame.get("meta", {}).get("related_images", []):
                         ri_filename = _validate_ri_path(ri_filename)
-                        ri_realpath = os.path.join(tmp_dir, ri_filename)
+                        ri_realpath = tmp_dir / ri_filename
 
                         files_to_download.append(ri_filename)
                         frame_media.append((ri_realpath, ri_filename))
@@ -744,8 +745,8 @@ class MediaCache:
 
                     for _, ri_path in frame_ris:
                         ri_filename = _validate_ri_path(ri_path)
-                        ri_realpath = os.path.join(raw_data_dir, ri_filename)
-                        frame_media.append((ri_realpath, ri_filename, None))
+                        ri_realpath = raw_data_dir / ri_filename
+                        frame_media.append((ri_realpath, ri_filename))
 
                     media.append((frame_id, frame_media))
 
@@ -787,7 +788,7 @@ class MediaCache:
                 source_path=source_path,
                 allow_threading=False,
             )
-            if not os.path.isfile(manifest_path):
+            if not manifest_path.is_file():
                 try:
                     reader.manifest.link(source_path, force=True)
                     reader.manifest.create()
